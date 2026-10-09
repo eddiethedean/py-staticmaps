@@ -113,6 +113,22 @@ def test_collinear_vertices_do_not_collapse_pillow_dashes() -> None:
     assert simple.tobytes() == dense.tobytes()
 
 
+def test_simplified_path_keeps_original_dash_phase() -> None:
+    points = [(10 + index, 30 + (index % 2) * 0.2) for index in range(501)]
+    image = Image.new("RGBA", (530, 80))
+
+    _draw_pillow_dashes(
+        ImageDraw.Draw(image),
+        points,
+        [10, 5],
+        bounds=(0, 0, 530, 80),
+        fill=(0, 0, 0, 255),
+        width=4,
+    )
+
+    assert typing.cast(typing.Tuple[int, int, int, int], image.getpixel((493, 30)))[3] == 0
+
+
 def test_path_simplification_preserves_curves() -> None:
     points = [
         (120 + 100 * math.cos(index * math.pi / 2000), 120 + 100 * math.sin(index * math.pi / 2000))
@@ -175,3 +191,39 @@ def test_closed_area_dashes_use_closing_edge_direction() -> None:
 
     assert diagonal_short_strokes
     assert all(abs(dx) > 0 and abs(dy) > 0 for dx, dy in diagonal_short_strokes)
+
+
+def test_crossing_dashes_use_the_current_edge_direction() -> None:
+    class RecordingDraw:
+        def __init__(self) -> None:
+            self.calls: typing.List[
+                typing.Tuple[
+                    typing.Sequence[typing.Tuple[float, float]],
+                    typing.Dict[str, typing.Any],
+                ]
+            ] = []
+
+        def line(self, points: typing.Sequence[typing.Tuple[float, float]], **kwargs: typing.Any) -> None:
+            self.calls.append((points, kwargs))
+
+    draw = RecordingDraw()
+    _draw_pillow_dashes(
+        draw,
+        [(7, 30), (50, 30), (20, 70), (20, 10)],
+        [1, 6],
+        bounds=(0, 0, 80, 80),
+        fill=(0, 0, 0, 255),
+        width=4,
+    )
+
+    crossing_strokes = []
+    for points, kwargs in draw.calls:
+        if kwargs["width"] != 1:
+            continue
+        start, end = points
+        center = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+        if abs(center[0] - 20) < 0.1 and abs(center[1] - 30) < 0.1:
+            crossing_strokes.append((end[0] - start[0], end[1] - start[1]))
+
+    assert crossing_strokes
+    assert all(abs(dx) > 0 and dy == 0 for dx, dy in crossing_strokes)

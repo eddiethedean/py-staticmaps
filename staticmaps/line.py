@@ -190,7 +190,14 @@ def _dash_segments(
     dash_array: typing.Optional[typing.Sequence[float]],
     bounds: typing.Tuple[float, float, float, float],
     close: bool = False,
-) -> typing.Iterator[typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]]:
+    source_lengths: typing.Optional[typing.Sequence[float]] = None,
+) -> typing.Iterator[
+    typing.Tuple[
+        typing.Tuple[float, float],
+        typing.Tuple[float, float],
+        typing.Tuple[float, float],
+    ]
+]:
     """Yield visible dash segments without processing portions outside the image."""
     if dash_array is None or len(points) < 2:
         return
@@ -205,25 +212,35 @@ def _dash_segments(
         edges.append((points[-1], points[0]))
 
     distance = 0.0
-    for start, end in edges:
+    for index, (start, end) in enumerate(edges):
         edge_length = math.hypot(end[0] - start[0], end[1] - start[1])
         if edge_length == 0:
             continue
-        yield from _dash_visible_edge(start, end, distance, edge_length, dash_options)
-        distance += edge_length
+        source_length = (
+            source_lengths[index] if source_lengths is not None and index < len(source_lengths) else edge_length
+        )
+        yield from _dash_visible_edge(start, end, distance, source_length=source_length, dash_options=dash_options)
+        distance += source_length
 
 
 def _dash_visible_edge(
     start: typing.Tuple[float, float],
     end: typing.Tuple[float, float],
     distance: float,
-    edge_length: float,
+    *,
+    source_length: float,
     dash_options: typing.Tuple[
         typing.Tuple[float, float, float, float],
         typing.Sequence[float],
         float,
     ],
-) -> typing.Iterator[typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]]:
+) -> typing.Iterator[
+    typing.Tuple[
+        typing.Tuple[float, float],
+        typing.Tuple[float, float],
+        typing.Tuple[float, float],
+    ]
+]:
     clipped = _clip_line_segment(start, end, dash_options[0])
     if clipped is None:
         return
@@ -232,8 +249,16 @@ def _dash_visible_edge(
     dy = end[1] - start[1]
     visible_start = (start[0] + dx * clipped[0], start[1] + dy * clipped[0])
     visible_end = (start[0] + dx * clipped[1], start[1] + dy * clipped[1])
-    phase = (distance + edge_length * clipped[0]) % dash_options[2]
-    yield from _dash_line_segment(visible_start, visible_end, phase, dash_options[1], dash_options[2])
+    visible_source_length = source_length * (clipped[1] - clipped[0])
+    phase = (distance + source_length * clipped[0]) % dash_options[2]
+    yield from _dash_line_segment(
+        visible_start,
+        visible_end,
+        phase,
+        dash_options[1],
+        dash_options[2],
+        source_length=visible_source_length,
+    )
 
 
 def _clip_line_segment(
@@ -273,12 +298,18 @@ def _dash_line_segment(
     phase: float,
     pattern: typing.Sequence[float],
     pattern_length: float,
-) -> typing.Iterator[typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]]:
-    """Yield on portions of a clipped edge, trimming inclusive Pillow endpoints by one pixel."""
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    edge_length = math.hypot(dx, dy)
-    if edge_length == 0:
+    *,
+    source_length: float,
+) -> typing.Iterator[
+    typing.Tuple[
+        typing.Tuple[float, float],
+        typing.Tuple[float, float],
+        typing.Tuple[float, float],
+    ]
+]:
+    """Yield on portions of an edge, trimming inclusive Pillow endpoints by one pixel."""
+    vector = (end[0] - start[0], end[1] - start[1])
+    if vector == (0, 0) or source_length == 0:
         return
 
     phase %= pattern_length
@@ -288,19 +319,13 @@ def _dash_line_segment(
         pattern_index = (pattern_index + 1) % len(pattern)
     pattern_remaining = pattern[pattern_index] - phase
     position = 0.0
-    while position < edge_length:
-        length = min(pattern_remaining, edge_length - position)
+    while position < source_length:
+        length = min(pattern_remaining, source_length - position)
         if pattern_index % 2 == 0:
             drawn_length = max(0.0, length - 1.0)
-            segment_start = (
-                start[0] + dx * position / edge_length,
-                start[1] + dy * position / edge_length,
-            )
-            segment_end = (
-                start[0] + dx * (position + drawn_length) / edge_length,
-                start[1] + dy * (position + drawn_length) / edge_length,
-            )
-            yield segment_start, segment_end
+            segment_start = _segment_point(start, vector, position / source_length)
+            segment_end = _segment_point(start, vector, (position + drawn_length) / source_length)
+            yield segment_start, segment_end, vector
         position += length
         pattern_remaining -= length
         if pattern_remaining <= 1e-9:
@@ -308,12 +333,19 @@ def _dash_line_segment(
             pattern_remaining = pattern[pattern_index]
 
 
-def _simplify_points(
+def _segment_point(
+    start: typing.Tuple[float, float],
+    vector: typing.Tuple[float, float],
+    ratio: float,
+) -> typing.Tuple[float, float]:
+    return start[0] + vector[0] * ratio, start[1] + vector[1] * ratio
+
+
+def _simplified_point_indices(
     points: typing.Sequence[typing.Tuple[float, float]],
-) -> typing.List[typing.Tuple[float, float]]:
-    """Simplify a path while keeping every removed point within 0.25 pixels."""
+) -> typing.List[int]:
     if len(points) < 3:
-        return list(points)
+        return list(range(len(points)))
 
     kept = [False] * len(points)
     kept[0] = kept[-1] = True
@@ -334,7 +366,26 @@ def _simplify_points(
             pending.append((first_index, farthest_index))
             pending.append((farthest_index, last_index))
 
-    return [point for index, point in enumerate(points) if kept[index]]
+    return [index for index, keep in enumerate(kept) if keep]
+
+
+def _simplify_points(
+    points: typing.Sequence[typing.Tuple[float, float]],
+) -> typing.List[typing.Tuple[float, float]]:
+    """Simplify a path while keeping every removed point within 0.25 pixels."""
+    return [points[index] for index in _simplified_point_indices(points)]
+
+
+def _simplify_points_with_lengths(
+    points: typing.Sequence[typing.Tuple[float, float]],
+) -> typing.Tuple[typing.List[typing.Tuple[float, float]], typing.List[float]]:
+    indices = _simplified_point_indices(points)
+    distances = [0.0]
+    for start, end in zip(points, points[1:]):
+        distances.append(distances[-1] + math.hypot(end[0] - start[0], end[1] - start[1]))
+    simplified = [points[index] for index in indices]
+    lengths = [distances[end] - distances[start] for start, end in zip(indices, indices[1:])]
+    return simplified, lengths
 
 
 def _point_to_segment_distance(
@@ -358,34 +409,6 @@ def _point_to_segment_distance(
     return math.hypot(point[0] - closest[0], point[1] - closest[1])
 
 
-def _nearest_direction(
-    point: typing.Tuple[float, float],
-    points: typing.Sequence[typing.Tuple[float, float]],
-) -> typing.Tuple[float, float]:
-    """Find the direction of the source segment nearest to a pixel point."""
-    nearest: typing.Optional[typing.Tuple[float, float]] = None
-    nearest_distance = float("inf")
-    for start, end in zip(points, points[1:]):
-        dx = end[0] - start[0]
-        dy = end[1] - start[1]
-        length_squared = dx * dx + dy * dy
-        if length_squared == 0:
-            continue
-        ratio = max(
-            0.0,
-            min(
-                1.0,
-                ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared,
-            ),
-        )
-        closest = (start[0] + ratio * dx, start[1] + ratio * dy)
-        distance = math.hypot(point[0] - closest[0], point[1] - closest[1])
-        if distance < nearest_distance:
-            nearest = (dx, dy)
-            nearest_distance = distance
-    return nearest or (0.0, 0.0)
-
-
 def _draw_pillow_dashes(
     draw: typing.Any,
     points: typing.Sequence[typing.Tuple[float, float]],
@@ -397,13 +420,13 @@ def _draw_pillow_dashes(
     close: bool = False,
 ) -> None:
     """Draw Pillow dashes without collapsing short runs to one-pixel dots."""
-    points = _simplify_points(points)
-    direction_points = points + [points[0]] if close and points else points
-    for start, end in _dash_segments(points, pattern, bounds, close):
+    points, source_lengths = _simplify_points_with_lengths(points)
+    if close and points:
+        source_lengths.append(math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1]))
+    for start, end, (dx, dy) in _dash_segments(points, pattern, bounds, close, source_lengths):
         if (int(start[0]), int(start[1])) != (int(end[0]), int(end[1])):
             draw.line([start, end], fill=fill, width=width)
             continue
-        dx, dy = _nearest_direction(start, direction_points)
         length = math.hypot(dx, dy)
         if length:
             half_width = max(0.0, (width - 1) / 2)
