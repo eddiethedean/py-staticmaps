@@ -93,8 +93,8 @@ class Area(Line):
 
         if self.width() > 0:
             dash_array = self.dash_array()
-            polyline = renderer.drawing().polyline(
-                xys + [xys[0]],
+            outline = renderer.drawing().polygon(
+                xys,
                 fill="none",
                 stroke=self.color().hex_rgb(),
                 stroke_width=self.width(),
@@ -105,7 +105,7 @@ class Area(Line):
                     else {}
                 ),
             )
-            renderer.group().add(polyline)
+            renderer.group().add(outline)
 
     def render_cairo(self, renderer: CairoRenderer) -> None:
         """Render area using cairo

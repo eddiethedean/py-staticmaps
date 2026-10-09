@@ -85,8 +85,8 @@ def test_dense_fractional_vertices_preserve_pillow_dash_gaps() -> None:
         width=1,
     )
 
-    simple_row = [simple.getpixel((x, 15))[3] > 0 for x in range(10, 50)]
-    dense_row = [dense.getpixel((x, 15))[3] > 0 for x in range(10, 50)]
+    simple_row = [typing.cast(typing.Tuple[int, int, int, int], simple.getpixel((x, 15)))[3] > 0 for x in range(10, 50)]
+    dense_row = [typing.cast(typing.Tuple[int, int, int, int], dense.getpixel((x, 15)))[3] > 0 for x in range(10, 50)]
     assert dense_row == simple_row
 
 
@@ -101,7 +101,7 @@ def test_clipped_pillow_dashes_keep_the_original_phase() -> None:
         width=1,
     )
 
-    row = [image.getpixel((x, 15))[3] > 0 for x in range(10)]
+    row = [typing.cast(typing.Tuple[int, int, int, int], image.getpixel((x, 15)))[3] > 0 for x in range(10)]
     assert row == [True, False] * 5
 
 
@@ -140,8 +140,8 @@ def test_short_dashes_keep_both_directions_at_a_bend() -> None:
         width=8,
     )
 
-    assert image.getpixel((10, 17))[3] > 0
-    assert image.getpixel((7, 20))[3] > 0
+    assert typing.cast(typing.Tuple[int, int, int, int], image.getpixel((10, 17)))[3] > 0
+    assert typing.cast(typing.Tuple[int, int, int, int], image.getpixel((7, 20)))[3] > 0
 
 
 def test_collinear_vertices_do_not_collapse_pillow_dashes() -> None:
@@ -166,7 +166,9 @@ def test_collinear_vertices_do_not_collapse_pillow_dashes() -> None:
         width=4,
     )
 
-    painted_rows = [y for y in range(20) if dense.getpixel((50, y))[3] > 0]
+    painted_rows = [
+        y for y in range(20) if typing.cast(typing.Tuple[int, int, int, int], dense.getpixel((50, y)))[3] > 0
+    ]
     assert painted_rows == [9, 10, 11, 12]
 
 

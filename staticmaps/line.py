@@ -371,19 +371,20 @@ def _dash_path_length(points: typing.Sequence[typing.Tuple[float, float]]) -> fl
 
 def _has_direction_change(points: typing.Sequence[typing.Tuple[float, float]]) -> bool:
     threshold = math.sin(math.pi / 36)
-    previous_vector: typing.Optional[typing.Tuple[float, float]] = None
+    reference_vector: typing.Optional[typing.Tuple[float, float]] = None
     for start, end in zip(points, points[1:]):
         vector = end[0] - start[0], end[1] - start[1]
         length = math.hypot(*vector)
         if length == 0:
             continue
-        if previous_vector is not None:
-            previous_length = math.hypot(*previous_vector)
-            cross = previous_vector[0] * vector[1] - previous_vector[1] * vector[0]
-            dot = previous_vector[0] * vector[0] + previous_vector[1] * vector[1]
-            if dot < 0 or abs(cross) > threshold * previous_length * length:
+        if reference_vector is not None:
+            reference_length = math.hypot(*reference_vector)
+            cross = reference_vector[0] * vector[1] - reference_vector[1] * vector[0]
+            dot = reference_vector[0] * vector[0] + reference_vector[1] * vector[1]
+            if dot < 0 or abs(cross) > threshold * reference_length * length:
                 return True
-        previous_vector = vector
+        else:
+            reference_vector = vector
     return False
 
 
