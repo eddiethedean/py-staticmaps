@@ -16,11 +16,11 @@ def test_dash_array_is_serialized_on_area_outline() -> None:
     renderer.render_objects([staticmaps.Area(points, color=staticmaps.BLUE, width=2, dash_array=[10, 5])])
 
     root = ET.fromstring(renderer.drawing().tostring())
-    polyline = root.find(".//{http://www.w3.org/2000/svg}polyline")
+    outline = root.find(".//{http://www.w3.org/2000/svg}polygon[@stroke-dasharray]")
 
-    assert polyline is not None
-    assert polyline.get("stroke-dasharray") == "10,5"
-    assert polyline.get("points", "").split()[0] == polyline.get("points", "").split()[-1]
+    assert outline is not None
+    assert outline.get("fill") == "none"
+    assert outline.get("stroke-dasharray") == "10,5"
 
 
 def test_tiny_closed_dashed_outline_remains_visible_in_pillow() -> None:
