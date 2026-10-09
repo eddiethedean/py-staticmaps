@@ -185,6 +185,7 @@ class Line(Object):
         renderer.context().stroke()
 
 
+# pylint: disable=too-many-branches,too-many-locals,too-many-statements
 def _dash_segments(
     points: typing.Sequence[typing.Tuple[float, float]],
     dash_array: typing.Optional[typing.Sequence[float]],
@@ -192,8 +193,7 @@ def _dash_segments(
     close: bool = False,
 ) -> typing.Iterator[
     typing.Tuple[
-        typing.Tuple[float, float],
-        typing.Tuple[float, float],
+        typing.Sequence[typing.Tuple[float, float]],
         typing.Tuple[float, float],
     ]
 ]:
@@ -204,66 +204,108 @@ def _dash_segments(
     pattern = list(dash_array)
     if len(pattern) % 2:
         pattern *= 2
-    pattern_length = sum(pattern)
-    dash_options = bounds, pattern, pattern_length
     edges = list(zip(points, points[1:]))
     if close and len(points) > 1:
         edges.append((points[-1], points[0]))
 
-    distance = 0.0
+    position_in_pattern = 0.0
+    pattern_index = 0
+    active_points: typing.List[typing.Tuple[float, float]] = []
+    active_tangent = (0.0, 0.0)
     for index, (start, end) in enumerate(edges):
         edge_length = math.hypot(end[0] - start[0], end[1] - start[1])
         if edge_length == 0:
             continue
-        yield from _dash_visible_edge(
-            start,
-            end,
-            distance,
-            source_length=edge_length,
-            trim_terminal=not close and index == len(edges) - 1,
-            dash_options=dash_options,
-        )
-        distance += edge_length
+        vector = end[0] - start[0], end[1] - start[1]
+        clipped_edge = _clip_line_segment(start, end, bounds)
+        if clipped_edge is None:
+            if active_points:
+                yield _finish_dash_run(active_points, active_tangent, trim_end=False)
+                active_points = []
+            pattern_index, position_in_pattern = _advance_dash_pattern(
+                pattern_index, position_in_pattern, edge_length, pattern
+            )
+            continue
+
+        visible_start_position = edge_length * clipped_edge[0]
+        visible_end_position = edge_length * clipped_edge[1]
+        clipped_start = _segment_point(start, vector, clipped_edge[0])
+        clipped_end = _segment_point(start, vector, clipped_edge[1])
+        visible_vector = clipped_end[0] - clipped_start[0], clipped_end[1] - clipped_start[1]
+        visible_length = visible_end_position - visible_start_position
+        edge_position = visible_start_position
+        if edge_position > 0:
+            if active_points:
+                yield _finish_dash_run(active_points, active_tangent, trim_end=False)
+                active_points = []
+            pattern_index, position_in_pattern = _advance_dash_pattern(
+                pattern_index, position_in_pattern, edge_position, pattern
+            )
+        while edge_position < visible_end_position:
+            pattern_remaining = pattern[pattern_index] - position_in_pattern
+            length = min(pattern_remaining, visible_end_position - edge_position)
+            piece_start = _segment_point(
+                clipped_start, visible_vector, (edge_position - visible_start_position) / visible_length
+            )
+            piece_end = _segment_point(
+                clipped_start,
+                visible_vector,
+                (edge_position + length - visible_start_position) / visible_length,
+            )
+
+            if pattern_index % 2 == 0:
+                if (
+                    active_points
+                    and math.hypot(active_points[-1][0] - piece_start[0], active_points[-1][1] - piece_start[1]) > 1e-7
+                ):
+                    yield _finish_dash_run(active_points, active_tangent, trim_end=False)
+                    active_points = []
+                if not active_points:
+                    active_points.append(piece_start)
+                if piece_start != piece_end:
+                    active_points.append(piece_end)
+                active_tangent = vector
+            elif active_points:
+                yield _finish_dash_run(active_points, active_tangent, trim_end=False)
+                active_points = []
+
+            edge_position += length
+            position_in_pattern += length
+            pattern_ends = position_in_pattern >= pattern[pattern_index] - 1e-9
+            path_ends = not close and index == len(edges) - 1 and edge_position >= edge_length - 1e-9
+            if pattern_ends or path_ends:
+                trim_end = pattern_index % 2 == 0 and (pattern_ends or path_ends)
+                if pattern_index % 2 == 0 and active_points:
+                    yield _finish_dash_run(active_points, active_tangent, trim_end=trim_end)
+                    active_points = []
+            if pattern_ends:
+                pattern_index = (pattern_index + 1) % len(pattern)
+                position_in_pattern = 0.0
+        if clipped_edge[1] < 1.0:
+            if active_points:
+                yield _finish_dash_run(active_points, active_tangent, trim_end=False)
+                active_points = []
+            pattern_index, position_in_pattern = _advance_dash_pattern(
+                pattern_index, position_in_pattern, edge_length * (1.0 - clipped_edge[1]), pattern
+            )
+
+    if active_points:
+        yield _finish_dash_run(active_points, active_tangent, trim_end=False)
 
 
-def _dash_visible_edge(
-    start: typing.Tuple[float, float],
-    end: typing.Tuple[float, float],
+def _advance_dash_pattern(
+    pattern_index: int,
+    position_in_pattern: float,
     distance: float,
-    *,
-    source_length: float,
-    trim_terminal: bool,
-    dash_options: typing.Tuple[
-        typing.Tuple[float, float, float, float],
-        typing.Sequence[float],
-        float,
-    ],
-) -> typing.Iterator[
-    typing.Tuple[
-        typing.Tuple[float, float],
-        typing.Tuple[float, float],
-        typing.Tuple[float, float],
-    ]
-]:
-    clipped = _clip_line_segment(start, end, dash_options[0])
-    if clipped is None:
-        return
-
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    visible_start = (start[0] + dx * clipped[0], start[1] + dy * clipped[0])
-    visible_end = (start[0] + dx * clipped[1], start[1] + dy * clipped[1])
-    visible_source_length = source_length * (clipped[1] - clipped[0])
-    phase = (distance + source_length * clipped[0]) % dash_options[2]
-    yield from _dash_line_segment(
-        visible_start,
-        visible_end,
-        phase,
-        dash_options[1],
-        dash_options[2],
-        source_length=visible_source_length,
-        trim_terminal=trim_terminal and clipped[1] == 1.0,
-    )
+    pattern: typing.Sequence[float],
+) -> typing.Tuple[int, float]:
+    cycle_length = sum(pattern)
+    position = (sum(pattern[:pattern_index]) + position_in_pattern + distance) % cycle_length
+    pattern_index = 0
+    while position >= pattern[pattern_index]:
+        position -= pattern[pattern_index]
+        pattern_index += 1
+    return pattern_index, position
 
 
 def _clip_line_segment(
@@ -297,55 +339,28 @@ def _clip_line_segment(
     return t_start, t_end
 
 
-def _dash_line_segment(
-    start: typing.Tuple[float, float],
-    end: typing.Tuple[float, float],
-    phase: float,
-    pattern: typing.Sequence[float],
-    pattern_length: float,
+def _finish_dash_run(
+    points: typing.List[typing.Tuple[float, float]],
+    tangent: typing.Tuple[float, float],
     *,
-    source_length: float,
-    trim_terminal: bool,
-) -> typing.Iterator[
-    typing.Tuple[
-        typing.Tuple[float, float],
-        typing.Tuple[float, float],
-        typing.Tuple[float, float],
-    ]
-]:
-    """Yield on portions of an edge, trimming only inclusive dash and path endpoints."""
-    vector = (end[0] - start[0], end[1] - start[1])
-    if vector == (0, 0) or source_length == 0:
-        return
-
-    phase %= pattern_length
-    pattern_index = 0
-    while phase >= pattern[pattern_index]:
-        phase -= pattern[pattern_index]
-        pattern_index = (pattern_index + 1) % len(pattern)
-    pattern_remaining = pattern[pattern_index] - phase
-    position = 0.0
-    while position < source_length:
-        length = min(pattern_remaining, source_length - position)
-        if pattern_index % 2 == 0:
-            drawn_length = max(
-                0.0,
-                length
-                - (
-                    1.0
-                    if length >= pattern_remaining - 1e-9
-                    or (trim_terminal and position + length >= source_length - 1e-9)
-                    else 0.0
-                ),
-            )
-            segment_start = _segment_point(start, vector, position / source_length)
-            segment_end = _segment_point(start, vector, (position + drawn_length) / source_length)
-            yield segment_start, segment_end, vector
-        position += length
-        pattern_remaining -= length
-        if pattern_remaining <= 1e-9:
-            pattern_index = (pattern_index + 1) % len(pattern)
-            pattern_remaining = pattern[pattern_index]
+    trim_end: bool,
+) -> typing.Tuple[typing.Sequence[typing.Tuple[float, float]], typing.Tuple[float, float]]:
+    if trim_end:
+        remaining = 1.0
+        while len(points) > 1 and remaining > 0:
+            previous = points[-2]
+            end = points[-1]
+            length = math.hypot(end[0] - previous[0], end[1] - previous[1])
+            if length <= remaining:
+                points.pop()
+                remaining -= length
+            else:
+                ratio = (length - remaining) / length
+                points[-1] = _segment_point(previous, (end[0] - previous[0], end[1] - previous[1]), ratio)
+                remaining = 0
+    if len(points) > 1:
+        tangent = points[-1][0] - points[-2][0], points[-1][1] - points[-2][1]
+    return points, tangent
 
 
 def _segment_point(
@@ -367,12 +382,20 @@ def _draw_pillow_dashes(
     close: bool = False,
 ) -> None:
     """Draw Pillow dashes without collapsing short runs to one-pixel dots."""
-    for start, end, (dx, dy) in _dash_segments(points, pattern, bounds, close):
-        if (int(start[0]), int(start[1])) != (int(end[0]), int(end[1])):
-            draw.line([start, end], fill=fill, width=width)
+    for dash_points, (dx, dy) in _dash_segments(points, pattern, bounds, close):
+        path_length = sum(
+            math.hypot(end[0] - start[0], end[1] - start[1]) for start, end in zip(dash_points, dash_points[1:])
+        )
+        endpoints_differ = (int(dash_points[0][0]), int(dash_points[0][1])) != (
+            int(dash_points[-1][0]),
+            int(dash_points[-1][1]),
+        )
+        if path_length > 1 or (len(dash_points) > 1 and endpoints_differ):
+            draw.line(dash_points, fill=fill, width=width)
             continue
         length = math.hypot(dx, dy)
         if length:
+            start = dash_points[0]
             half_width = max(0.0, (width - 1) / 2)
             normal = (-dy / length, dx / length)
             draw.line(

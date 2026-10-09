@@ -63,6 +63,48 @@ def test_dash_array_preserves_one_pixel_gaps_in_pillow() -> None:
     assert row == [True, False] * 5
 
 
+def test_dense_fractional_vertices_preserve_pillow_dash_gaps() -> None:
+    bounds = (0, 0, 60, 30)
+    color = (0, 0, 0, 255)
+    simple = Image.new("RGBA", (60, 30))
+    dense = Image.new("RGBA", (60, 30))
+    _draw_pillow_dashes(
+        ImageDraw.Draw(simple),
+        [(10.25, 15), (50.25, 15)],
+        [1, 1],
+        bounds=bounds,
+        fill=color,
+        width=1,
+    )
+    _draw_pillow_dashes(
+        ImageDraw.Draw(dense),
+        [(10.25 + index * 0.1, 15) for index in range(401)],
+        [1, 1],
+        bounds=bounds,
+        fill=color,
+        width=1,
+    )
+
+    simple_row = [simple.getpixel((x, 15))[3] > 0 for x in range(10, 50)]
+    dense_row = [dense.getpixel((x, 15))[3] > 0 for x in range(10, 50)]
+    assert dense_row == simple_row
+
+
+def test_clipped_pillow_dashes_keep_the_original_phase() -> None:
+    image = Image.new("RGBA", (60, 30))
+    _draw_pillow_dashes(
+        ImageDraw.Draw(image),
+        [(-1_000_000, 15), (60, 15)],
+        [1, 1],
+        bounds=(-1, -1, 61, 31),
+        fill=(0, 0, 0, 255),
+        width=1,
+    )
+
+    row = [image.getpixel((x, 15))[3] > 0 for x in range(10)]
+    assert row == [True, False] * 5
+
+
 def test_dash_array_is_serialized_in_svg() -> None:
     start = staticmaps.create_latlng(0, 0)
     end = staticmaps.create_latlng(0, 0.5)
