@@ -28,9 +28,7 @@ class Line(Object):
             raise ValueError("Trying to create line with less than 2 coordinates")
         if width < 0:
             raise ValueError(f"'width' must be >= 0: {width}")
-        if dash_array is not None and any(
-            not math.isfinite(length) or length <= 0 for length in dash_array
-        ):
+        if dash_array is not None and any(not math.isfinite(length) or length <= 0 for length in dash_array):
             raise ValueError("'dash_array' values must be finite and > 0")
 
         self._latlngs = latlngs
@@ -113,9 +111,7 @@ class Line(Object):
             n = 2 + math.ceil(line.a13)
             for i in range(1, n + 1):
                 a = (i * line.a13) / n
-                g = line.ArcPosition(
-                    a, Geodesic.LATITUDE | Geodesic.LONGITUDE | Geodesic.LONG_UNROLL
-                )
+                g = line.ArcPosition(a, Geodesic.LATITUDE | Geodesic.LONGITUDE | Geodesic.LONG_UNROLL)
                 self._interpolation_cache.append(create_latlng(g["lat2"], g["lon2"]))
             last = current
         return self._interpolation_cache
@@ -130,9 +126,7 @@ class Line(Object):
             return
         xys = [
             (x + renderer.offset_x(), y)
-            for (x, y) in [
-                renderer.transformer().ll2pixel(latlng) for latlng in self.interpolate()
-            ]
+            for (x, y) in [renderer.transformer().ll2pixel(latlng) for latlng in self.interpolate()]
         ]
         if self.dash_array() is None:
             renderer.draw().line(xys, self.color().int_rgba(), self.width())
@@ -168,11 +162,7 @@ class Line(Object):
             stroke=self.color().hex_rgb(),
             stroke_width=self.width(),
             opacity=self.color().float_a(),
-            **(
-                {"stroke_dasharray": ",".join(str(length) for length in dash_array)}
-                if dash_array is not None
-                else {}
-            ),
+            **({"stroke_dasharray": ",".join(str(length) for length in dash_array)} if dash_array is not None else {}),
         )
         renderer.group().add(polyline)
 
@@ -200,9 +190,7 @@ def _dash_segments(
     dash_array: typing.Optional[typing.Sequence[float]],
     bounds: typing.Tuple[float, float, float, float],
     close: bool = False,
-) -> typing.Iterator[
-    typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]
-]:
+) -> typing.Iterator[typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]]:
     """Yield visible dash segments without processing portions outside the image."""
     if dash_array is None or len(points) < 2:
         return
@@ -235,9 +223,7 @@ def _dash_visible_edge(
         typing.Sequence[float],
         float,
     ],
-) -> typing.Iterator[
-    typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]
-]:
+) -> typing.Iterator[typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]]:
     clipped = _clip_line_segment(start, end, dash_options[0])
     if clipped is None:
         return
@@ -247,9 +233,7 @@ def _dash_visible_edge(
     visible_start = (start[0] + dx * clipped[0], start[1] + dy * clipped[0])
     visible_end = (start[0] + dx * clipped[1], start[1] + dy * clipped[1])
     phase = (distance + edge_length * clipped[0]) % dash_options[2]
-    yield from _dash_line_segment(
-        visible_start, visible_end, phase, dash_options[1], dash_options[2]
-    )
+    yield from _dash_line_segment(visible_start, visible_end, phase, dash_options[1], dash_options[2])
 
 
 def _clip_line_segment(
@@ -289,9 +273,7 @@ def _dash_line_segment(
     phase: float,
     pattern: typing.Sequence[float],
     pattern_length: float,
-) -> typing.Iterator[
-    typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]
-]:
+) -> typing.Iterator[typing.Tuple[typing.Tuple[float, float], typing.Tuple[float, float]]]:
     """Yield on portions of a clipped edge, trimming inclusive Pillow endpoints by one pixel."""
     dx = end[0] - start[0]
     dy = end[1] - start[1]
@@ -326,34 +308,54 @@ def _dash_line_segment(
             pattern_remaining = pattern[pattern_index]
 
 
-def _remove_collinear_points(
+def _simplify_points(
     points: typing.Sequence[typing.Tuple[float, float]],
 ) -> typing.List[typing.Tuple[float, float]]:
-    """Drop intermediate points that do not change a line's direction."""
-    result: typing.List[typing.Tuple[float, float]] = []
-    for point in points:
-        while len(result) >= 2:
-            first = result[-2]
-            middle = result[-1]
-            first_to_middle = (middle[0] - first[0], middle[1] - first[1])
-            middle_to_point = (point[0] - middle[0], point[1] - middle[1])
-            cross = (
-                first_to_middle[0] * middle_to_point[1]
-                - first_to_middle[1] * middle_to_point[0]
-            )
-            dot = (
-                first_to_middle[0] * middle_to_point[0]
-                + first_to_middle[1] * middle_to_point[1]
-            )
-            baseline_length = math.hypot(*first_to_middle)
-            # Pixel-scale interpolation wiggles should not turn one thick
-            # dash into many short Pillow strokes. Keep the simplification
-            # error below a quarter pixel so visible bends remain intact.
-            if (baseline_length and abs(cross) / baseline_length > 0.25) or dot < 0:
-                break
-            result.pop()
-        result.append(point)
-    return result
+    """Simplify a path while keeping every removed point within 0.25 pixels."""
+    if len(points) < 3:
+        return list(points)
+
+    kept = [False] * len(points)
+    kept[0] = kept[-1] = True
+    pending = [(0, len(points) - 1)]
+    while pending:
+        first_index, last_index = pending.pop()
+        first = points[first_index]
+        last = points[last_index]
+        farthest_index = -1
+        farthest_distance = 0.25
+        for index in range(first_index + 1, last_index):
+            distance = _point_to_segment_distance(points[index], first, last)
+            if distance > farthest_distance:
+                farthest_index = index
+                farthest_distance = distance
+        if farthest_index >= 0:
+            kept[farthest_index] = True
+            pending.append((first_index, farthest_index))
+            pending.append((farthest_index, last_index))
+
+    return [point for index, point in enumerate(points) if kept[index]]
+
+
+def _point_to_segment_distance(
+    point: typing.Tuple[float, float],
+    start: typing.Tuple[float, float],
+    end: typing.Tuple[float, float],
+) -> float:
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    length_squared = dx * dx + dy * dy
+    if length_squared == 0:
+        return math.hypot(point[0] - start[0], point[1] - start[1])
+    ratio = max(
+        0.0,
+        min(
+            1.0,
+            ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared,
+        ),
+    )
+    closest = (start[0] + ratio * dx, start[1] + ratio * dy)
+    return math.hypot(point[0] - closest[0], point[1] - closest[1])
 
 
 def _nearest_direction(
@@ -373,8 +375,7 @@ def _nearest_direction(
             0.0,
             min(
                 1.0,
-                ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy)
-                / length_squared,
+                ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared,
             ),
         )
         closest = (start[0] + ratio * dx, start[1] + ratio * dy)
@@ -396,12 +397,13 @@ def _draw_pillow_dashes(
     close: bool = False,
 ) -> None:
     """Draw Pillow dashes without collapsing short runs to one-pixel dots."""
-    points = _remove_collinear_points(points)
+    points = _simplify_points(points)
+    direction_points = points + [points[0]] if close and points else points
     for start, end in _dash_segments(points, pattern, bounds, close):
-        if start != end:
+        if (int(start[0]), int(start[1])) != (int(end[0]), int(end[1])):
             draw.line([start, end], fill=fill, width=width)
             continue
-        dx, dy = _nearest_direction(start, points)
+        dx, dy = _nearest_direction(start, direction_points)
         length = math.hypot(dx, dy)
         if length:
             half_width = max(0.0, (width - 1) / 2)

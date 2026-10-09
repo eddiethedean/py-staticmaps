@@ -50,9 +50,7 @@ class Area(Line):
         """
         xys = [
             (x + renderer.offset_x(), y)
-            for (x, y) in [
-                renderer.transformer().ll2pixel(latlng) for latlng in self.interpolate()
-            ]
+            for (x, y) in [renderer.transformer().ll2pixel(latlng) for latlng in self.interpolate()]
         ]
         overlay = PIL_Image.new("RGBA", renderer.image().size, (255, 255, 255, 0))
         draw = PIL_ImageDraw.Draw(overlay)
@@ -60,9 +58,7 @@ class Area(Line):
         renderer.alpha_compose(overlay)
         if self.width() > 0:
             if self.dash_array() is None:
-                renderer.draw().line(
-                    xys + [xys[0]], fill=self.color().int_rgba(), width=self.width()
-                )
+                renderer.draw().line(xys + [xys[0]], fill=self.color().int_rgba(), width=self.width())
             else:
                 bounds = (
                     -self.width(),
