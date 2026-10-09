@@ -345,6 +345,8 @@ def _finish_dash_run(
     *,
     trim_end: bool,
 ) -> typing.Tuple[typing.Sequence[typing.Tuple[float, float]], typing.Tuple[float, float]]:
+    if trim_end and _dash_path_length(points) <= 1 and _has_direction_change(points):
+        return points, (points[-1][0] - points[-2][0], points[-1][1] - points[-2][1])
     if trim_end:
         remaining = 1.0
         while len(points) > 1 and remaining > 0:
@@ -361,6 +363,28 @@ def _finish_dash_run(
     if len(points) > 1:
         tangent = points[-1][0] - points[-2][0], points[-1][1] - points[-2][1]
     return points, tangent
+
+
+def _dash_path_length(points: typing.Sequence[typing.Tuple[float, float]]) -> float:
+    return sum(math.hypot(end[0] - start[0], end[1] - start[1]) for start, end in zip(points, points[1:]))
+
+
+def _has_direction_change(points: typing.Sequence[typing.Tuple[float, float]]) -> bool:
+    threshold = math.sin(math.pi / 36)
+    previous_vector: typing.Optional[typing.Tuple[float, float]] = None
+    for start, end in zip(points, points[1:]):
+        vector = end[0] - start[0], end[1] - start[1]
+        length = math.hypot(*vector)
+        if length == 0:
+            continue
+        if previous_vector is not None:
+            previous_length = math.hypot(*previous_vector)
+            cross = previous_vector[0] * vector[1] - previous_vector[1] * vector[0]
+            dot = previous_vector[0] * vector[0] + previous_vector[1] * vector[1]
+            if dot < 0 or abs(cross) > threshold * previous_length * length:
+                return True
+        previous_vector = vector
+    return False
 
 
 def _segment_point(
@@ -383,15 +407,30 @@ def _draw_pillow_dashes(
 ) -> None:
     """Draw Pillow dashes without collapsing short runs to one-pixel dots."""
     for dash_points, (dx, dy) in _dash_segments(points, pattern, bounds, close):
-        path_length = sum(
-            math.hypot(end[0] - start[0], end[1] - start[1]) for start, end in zip(dash_points, dash_points[1:])
-        )
+        path_length = _dash_path_length(dash_points)
         endpoints_differ = (int(dash_points[0][0]), int(dash_points[0][1])) != (
             int(dash_points[-1][0]),
             int(dash_points[-1][1]),
         )
         if path_length > 1 or (len(dash_points) > 1 and endpoints_differ):
             draw.line(dash_points, fill=fill, width=width)
+            continue
+        if len(dash_points) > 1 and _has_direction_change(dash_points):
+            for start, end in zip(dash_points, dash_points[1:]):
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                length = math.hypot(dx, dy)
+                if length:
+                    normal = (-dy / length, dx / length)
+                    half_width = max(0.0, (width - 1) / 2)
+                    draw.line(
+                        [
+                            (start[0] - normal[0] * half_width, start[1] - normal[1] * half_width),
+                            (start[0] + normal[0] * half_width, start[1] + normal[1] * half_width),
+                        ],
+                        fill=fill,
+                        width=1,
+                    )
             continue
         length = math.hypot(dx, dy)
         if length:

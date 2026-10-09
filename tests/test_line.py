@@ -129,6 +129,21 @@ def test_short_dashes_preserve_pillow_stroke_width() -> None:
     assert sum(typing.cast(typing.Tuple[int, int, int, int], image.getpixel((10, y)))[3] > 0 for y in range(20)) == 4
 
 
+def test_short_dashes_keep_both_directions_at_a_bend() -> None:
+    image = Image.new("RGBA", (40, 50))
+    _draw_pillow_dashes(
+        ImageDraw.Draw(image),
+        [(10, 20), (10.5, 20), (10.5, 40)],
+        [1, 1],
+        bounds=(0, 0, 40, 50),
+        fill=(0, 0, 0, 255),
+        width=8,
+    )
+
+    assert image.getpixel((10, 17))[3] > 0
+    assert image.getpixel((7, 20))[3] > 0
+
+
 def test_collinear_vertices_do_not_collapse_pillow_dashes() -> None:
     bounds = (0, 0, 120, 20)
     color = (0, 0, 0, 255)

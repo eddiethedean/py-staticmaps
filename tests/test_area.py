@@ -44,4 +44,7 @@ def test_tiny_closed_dashed_outline_remains_visible_in_pillow() -> None:
         ]
     )
 
-    assert renderer.image().getbbox() is not None
+    bounds = renderer.image().getbbox()
+    assert bounds is not None
+    assert bounds[2] - bounds[0] >= 4
+    assert bounds[3] - bounds[1] >= 4
