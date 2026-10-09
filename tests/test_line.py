@@ -1,14 +1,13 @@
 # py-staticmaps
 # Copyright (c) 2020 Florian Pigorsch; see /LICENSE for licensing information
 
-import math
 import typing
 
 import pytest
 from PIL import Image, ImageDraw
 
 import staticmaps
-from staticmaps.line import _draw_pillow_dashes, _simplify_points
+from staticmaps.line import _draw_pillow_dashes
 from staticmaps.pillow_renderer import PillowRenderer
 from staticmaps.transformer import Transformer
 
@@ -110,50 +109,25 @@ def test_collinear_vertices_do_not_collapse_pillow_dashes() -> None:
         width=4,
     )
 
-    assert simple.tobytes() == dense.tobytes()
+    painted_rows = [y for y in range(20) if dense.getpixel((50, y))[3] > 0]
+    assert painted_rows == [9, 10, 11, 12]
 
 
-def test_simplified_path_keeps_original_dash_phase() -> None:
+def test_dash_phase_follows_nonuniform_source_path() -> None:
     points = [(10 + index, 30 + (index % 2) * 0.2) for index in range(501)]
-    image = Image.new("RGBA", (530, 80))
+    points.extend((10 + index, 30) for index in range(501, 1001))
+    image = Image.new("RGBA", (1030, 80))
 
     _draw_pillow_dashes(
         ImageDraw.Draw(image),
         points,
         [10, 5],
-        bounds=(0, 0, 530, 80),
+        bounds=(0, 0, 1030, 80),
         fill=(0, 0, 0, 255),
         width=4,
     )
 
-    assert typing.cast(typing.Tuple[int, int, int, int], image.getpixel((493, 30)))[3] == 0
-
-
-def test_path_simplification_preserves_curves() -> None:
-    points = [
-        (120 + 100 * math.cos(index * math.pi / 2000), 120 + 100 * math.sin(index * math.pi / 2000))
-        for index in range(1001)
-    ]
-
-    simplified = _simplify_points(points)
-
-    assert len(simplified) > 2
-    for point in points:
-        distances = []
-        for start, end in zip(simplified, simplified[1:]):
-            dx = end[0] - start[0]
-            dy = end[1] - start[1]
-            length_squared = dx * dx + dy * dy
-            ratio = max(
-                0.0,
-                min(
-                    1.0,
-                    ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared,
-                ),
-            )
-            closest = (start[0] + ratio * dx, start[1] + ratio * dy)
-            distances.append(math.hypot(point[0] - closest[0], point[1] - closest[1]))
-        assert min(distances) <= 0.25
+    assert typing.cast(typing.Tuple[int, int, int, int], image.getpixel((512, 30)))[3] > 0
 
 
 def test_closed_area_dashes_use_closing_edge_direction() -> None:

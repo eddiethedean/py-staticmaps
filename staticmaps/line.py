@@ -190,7 +190,6 @@ def _dash_segments(
     dash_array: typing.Optional[typing.Sequence[float]],
     bounds: typing.Tuple[float, float, float, float],
     close: bool = False,
-    source_lengths: typing.Optional[typing.Sequence[float]] = None,
 ) -> typing.Iterator[
     typing.Tuple[
         typing.Tuple[float, float],
@@ -216,11 +215,15 @@ def _dash_segments(
         edge_length = math.hypot(end[0] - start[0], end[1] - start[1])
         if edge_length == 0:
             continue
-        source_length = (
-            source_lengths[index] if source_lengths is not None and index < len(source_lengths) else edge_length
+        yield from _dash_visible_edge(
+            start,
+            end,
+            distance,
+            source_length=edge_length,
+            trim_terminal=not close and index == len(edges) - 1,
+            dash_options=dash_options,
         )
-        yield from _dash_visible_edge(start, end, distance, source_length=source_length, dash_options=dash_options)
-        distance += source_length
+        distance += edge_length
 
 
 def _dash_visible_edge(
@@ -229,6 +232,7 @@ def _dash_visible_edge(
     distance: float,
     *,
     source_length: float,
+    trim_terminal: bool,
     dash_options: typing.Tuple[
         typing.Tuple[float, float, float, float],
         typing.Sequence[float],
@@ -258,6 +262,7 @@ def _dash_visible_edge(
         dash_options[1],
         dash_options[2],
         source_length=visible_source_length,
+        trim_terminal=trim_terminal and clipped[1] == 1.0,
     )
 
 
@@ -300,6 +305,7 @@ def _dash_line_segment(
     pattern_length: float,
     *,
     source_length: float,
+    trim_terminal: bool,
 ) -> typing.Iterator[
     typing.Tuple[
         typing.Tuple[float, float],
@@ -307,7 +313,7 @@ def _dash_line_segment(
         typing.Tuple[float, float],
     ]
 ]:
-    """Yield on portions of an edge, trimming inclusive Pillow endpoints by one pixel."""
+    """Yield on portions of an edge, trimming only inclusive dash and path endpoints."""
     vector = (end[0] - start[0], end[1] - start[1])
     if vector == (0, 0) or source_length == 0:
         return
@@ -322,7 +328,16 @@ def _dash_line_segment(
     while position < source_length:
         length = min(pattern_remaining, source_length - position)
         if pattern_index % 2 == 0:
-            drawn_length = max(0.0, length - 1.0)
+            drawn_length = max(
+                0.0,
+                length
+                - (
+                    1.0
+                    if length >= pattern_remaining - 1e-9
+                    or (trim_terminal and position + length >= source_length - 1e-9)
+                    else 0.0
+                ),
+            )
             segment_start = _segment_point(start, vector, position / source_length)
             segment_end = _segment_point(start, vector, (position + drawn_length) / source_length)
             yield segment_start, segment_end, vector
@@ -341,74 +356,6 @@ def _segment_point(
     return start[0] + vector[0] * ratio, start[1] + vector[1] * ratio
 
 
-def _simplified_point_indices(
-    points: typing.Sequence[typing.Tuple[float, float]],
-) -> typing.List[int]:
-    if len(points) < 3:
-        return list(range(len(points)))
-
-    kept = [False] * len(points)
-    kept[0] = kept[-1] = True
-    pending = [(0, len(points) - 1)]
-    while pending:
-        first_index, last_index = pending.pop()
-        first = points[first_index]
-        last = points[last_index]
-        farthest_index = -1
-        farthest_distance = 0.25
-        for index in range(first_index + 1, last_index):
-            distance = _point_to_segment_distance(points[index], first, last)
-            if distance > farthest_distance:
-                farthest_index = index
-                farthest_distance = distance
-        if farthest_index >= 0:
-            kept[farthest_index] = True
-            pending.append((first_index, farthest_index))
-            pending.append((farthest_index, last_index))
-
-    return [index for index, keep in enumerate(kept) if keep]
-
-
-def _simplify_points(
-    points: typing.Sequence[typing.Tuple[float, float]],
-) -> typing.List[typing.Tuple[float, float]]:
-    """Simplify a path while keeping every removed point within 0.25 pixels."""
-    return [points[index] for index in _simplified_point_indices(points)]
-
-
-def _simplify_points_with_lengths(
-    points: typing.Sequence[typing.Tuple[float, float]],
-) -> typing.Tuple[typing.List[typing.Tuple[float, float]], typing.List[float]]:
-    indices = _simplified_point_indices(points)
-    distances = [0.0]
-    for start, end in zip(points, points[1:]):
-        distances.append(distances[-1] + math.hypot(end[0] - start[0], end[1] - start[1]))
-    simplified = [points[index] for index in indices]
-    lengths = [distances[end] - distances[start] for start, end in zip(indices, indices[1:])]
-    return simplified, lengths
-
-
-def _point_to_segment_distance(
-    point: typing.Tuple[float, float],
-    start: typing.Tuple[float, float],
-    end: typing.Tuple[float, float],
-) -> float:
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    length_squared = dx * dx + dy * dy
-    if length_squared == 0:
-        return math.hypot(point[0] - start[0], point[1] - start[1])
-    ratio = max(
-        0.0,
-        min(
-            1.0,
-            ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared,
-        ),
-    )
-    closest = (start[0] + ratio * dx, start[1] + ratio * dy)
-    return math.hypot(point[0] - closest[0], point[1] - closest[1])
-
-
 def _draw_pillow_dashes(
     draw: typing.Any,
     points: typing.Sequence[typing.Tuple[float, float]],
@@ -420,10 +367,7 @@ def _draw_pillow_dashes(
     close: bool = False,
 ) -> None:
     """Draw Pillow dashes without collapsing short runs to one-pixel dots."""
-    points, source_lengths = _simplify_points_with_lengths(points)
-    if close and points:
-        source_lengths.append(math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1]))
-    for start, end, (dx, dy) in _dash_segments(points, pattern, bounds, close, source_lengths):
+    for start, end, (dx, dy) in _dash_segments(points, pattern, bounds, close):
         if (int(start[0]), int(start[1])) != (int(end[0]), int(end[1])):
             draw.line([start, end], fill=fill, width=width)
             continue
